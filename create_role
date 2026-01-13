@@ -1,1 +1,83 @@
+-- 1. 系统管理员角色（最高权限，管理整个医院数据库）
+-- 角色名：r_hospital_admin
+-- 权限：拥有 HospitalSystem 数据库所有操作权限（含视图、表、存储过程等）
+CREATE ROLE 'r_hospital_admin'@'localhost';
+-- 分配数据库所有权限
+GRANT ALL PRIVILEGES ON HospitalSystem.* TO 'r_hospital_admin'@'localhost';
+-- 刷新权限生效
+FLUSH PRIVILEGES;
 
+-- 2. 前台角色（负责预约登记、就诊录入，查询基础视图）
+-- 角色名：r_hospital_reception
+-- 权限：查询所有8个视图 + 操作预约/就诊原表（业务必需）
+CREATE ROLE 'r_hospital_reception'@'localhost';
+-- 授予8个视图的查询权限
+GRANT SELECT ON HospitalSystem.v_patient_info TO 'r_hospital_reception'@'localhost';
+GRANT SELECT ON HospitalSystem.v_doctor_info TO 'r_hospital_reception'@'localhost';
+GRANT SELECT ON HospitalSystem.v_appointment_info TO 'r_hospital_reception'@'localhost';
+GRANT SELECT ON HospitalSystem.v_visit_record_info TO 'r_hospital_reception'@'localhost';
+GRANT SELECT ON HospitalSystem.v_prescription_medicine_info TO 'r_hospital_reception'@'localhost';
+GRANT SELECT ON HospitalSystem.v_payment_info TO 'r_hospital_reception'@'localhost';
+GRANT SELECT ON HospitalSystem.v_schedule_info TO 'r_hospital_reception'@'localhost';
+GRANT SELECT ON HospitalSystem.v_medicine_stock TO 'r_hospital_reception'@'localhost';
+-- 授予前台业务必需的原表操作权限（插入预约/就诊、更新状态）
+GRANT INSERT ON HospitalSystem.Appointment TO 'r_hospital_reception'@'localhost';
+GRANT INSERT ON HospitalSystem.VisitRecord TO 'r_hospital_reception'@'localhost';
+GRANT UPDATE (appointment_status, cancel_time) ON HospitalSystem.Appointment TO 'r_hospital_reception'@'localhost';
+GRANT UPDATE (visit_status) ON HospitalSystem.VisitRecord TO 'r_hospital_reception'@'localhost';
+FLUSH PRIVILEGES;
+
+-- 3. 医生角色（负责接诊、开立处方，查询相关视图）
+-- 角色名：r_hospital_doctor
+-- 权限：查询患者/就诊/处方/药品等视图 + 操作就诊/处方原表
+CREATE ROLE 'r_hospital_doctor'@'localhost';
+-- 授予医生业务相关视图的查询权限
+GRANT SELECT ON HospitalSystem.v_patient_info TO 'r_hospital_doctor'@'localhost';
+GRANT SELECT ON HospitalSystem.v_doctor_info TO 'r_hospital_doctor'@'localhost';
+GRANT SELECT ON HospitalSystem.v_visit_record_info TO 'r_hospital_doctor'@'localhost';
+GRANT SELECT ON HospitalSystem.v_prescription_medicine_info TO 'r_hospital_doctor'@'localhost';
+GRANT SELECT ON HospitalSystem.v_schedule_info TO 'r_hospital_doctor'@'localhost';
+GRANT SELECT ON HospitalSystem.v_medicine_stock TO 'r_hospital_doctor'@'localhost';
+-- 授予医生业务必需的原表操作权限（更新就诊记录、插入处方）
+GRANT UPDATE (symptoms, diagnosis, visit_status) ON HospitalSystem.VisitRecord TO 'r_hospital_doctor'@'localhost';
+GRANT INSERT ON HospitalSystem.Prescription TO 'r_hospital_doctor'@'localhost';
+GRANT INSERT ON HospitalSystem.PrescriptionMedicine TO 'r_hospital_doctor'@'localhost';
+FLUSH PRIVILEGES;
+
+-- 4. 药房管理员角色（负责药品库存管理、处方发药）
+-- 角色名：r_hospital_pharmacy
+-- 权限：查询药品/处方视图 + 操作药品/处方原表
+-- =============================================
+CREATE ROLE 'r_hospital_pharmacy'@'localhost';
+-- 授予药房业务相关视图的查询权限
+GRANT SELECT ON HospitalSystem.v_medicine_stock TO 'r_hospital_pharmacy'@'localhost';
+GRANT SELECT ON HospitalSystem.v_prescription_medicine_info TO 'r_hospital_pharmacy'@'localhost';
+-- 授予药房业务必需的原表操作权限（更新药品库存、处方状态）
+GRANT UPDATE (stock, is_available) ON HospitalSystem.Medicine TO 'r_hospital_pharmacy'@'localhost';
+GRANT UPDATE (prescription_status) ON HospitalSystem.Prescription TO 'r_hospital_pharmacy'@'localhost';
+FLUSH PRIVILEGES;
+
+-- 5. 收费员角色（负责费用结算、查询就诊/处方信息）
+-- 角色名：r_hospital_cashier
+-- 权限：查询就诊/处方/收费视图 + 操作收费原表
+CREATE ROLE 'r_hospital_cashier'@'localhost';
+-- 授予收费员业务相关视图的查询权限
+GRANT SELECT ON HospitalSystem.v_visit_record_info TO 'r_hospital_cashier'@'localhost';
+GRANT SELECT ON HospitalSystem.v_prescription_medicine_info TO 'r_hospital_cashier'@'localhost';
+GRANT SELECT ON HospitalSystem.v_payment_info TO 'r_hospital_cashier'@'localhost';
+GRANT SELECT ON HospitalSystem.v_medicine_stock TO 'r_hospital_cashier'@'localhost';
+-- 授予收费员业务必需的原表操作权限（插入收费记录、更新就诊状态）
+GRANT INSERT ON HospitalSystem.Payment TO 'r_hospital_cashier'@'localhost';
+GRANT UPDATE (visit_status) ON HospitalSystem.VisitRecord TO 'r_hospital_cashier'@'localhost';
+FLUSH PRIVILEGES;
+
+-- 6. 患者角色（仅查询个人相关信息，无任何修改权限）
+-- 角色名：r_hospital_patient
+-- 权限：仅查询与患者相关的4个视图，无原表操作权限
+CREATE ROLE 'r_hospital_patient'@'localhost';
+-- 授予患者个人相关英文视图的查询权限
+GRANT SELECT ON HospitalSystem.v_patient_info TO 'r_hospital_patient'@'localhost';
+GRANT SELECT ON HospitalSystem.v_appointment_info TO 'r_hospital_patient'@'localhost';
+GRANT SELECT ON HospitalSystem.v_visit_record_info TO 'r_hospital_patient'@'localhost';
+GRANT SELECT ON HospitalSystem.v_payment_info TO 'r_hospital_patient'@'localhost';
+FLUSH PRIVILEGES;
