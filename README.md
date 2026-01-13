@@ -3,3 +3,4 @@ create_view用于创建视图
 create_function用于创建存储函数
 create_procedure用于创建存储过程
 create_trigger用于创建触发器
+create_role用于创建角色
