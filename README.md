@@ -4,3 +4,4 @@ create_function用于创建存储函数
 create_procedure用于创建存储过程
 create_trigger用于创建触发器
 create_role用于创建角色
+releases里面有功能演示视频
