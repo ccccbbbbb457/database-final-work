@@ -1,1 +1,47 @@
+-- View structure for v_appointment_info
+-- ----------------------------
+DROP VIEW IF EXISTS `v_appointment_info`;
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_appointment_info` AS select `a`.`appointment_id` AS `appointment_id`,`p`.`patient_id` AS `patient_id`,`p`.`name` AS `patient_name`,`de`.`dept_id` AS `department_id`,`de`.`dept_name` AS `department_name`,`d`.`doctor_id` AS `doctor_id`,`d`.`name` AS `doctor_name`,`a`.`expected_time` AS `expected_datetime`,`a`.`appointment_status` AS `appointment_status`,`a`.`create_time` AS `create_datetime`,`a`.`cancel_time` AS `cancel_datetime` from (((`appointment` `a` left join `patient` `p` on((`a`.`patient_id` = `p`.`patient_id`))) left join `department` `de` on((`a`.`dept_id` = `de`.`dept_id`))) left join `doctor` `d` on((`a`.`doctor_id` = `d`.`doctor_id`)));
+
+-- ----------------------------
+-- View structure for v_doctor_info
+-- ----------------------------
+DROP VIEW IF EXISTS `v_doctor_info`;
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_doctor_info` AS select `d`.`doctor_id` AS `doctor_id`,`d`.`name` AS `doctor_name`,`d`.`title` AS `job_title`,`d`.`phone` AS `phone_number`,`d`.`is_available` AS `is_available`,`de`.`dept_id` AS `department_id`,`de`.`dept_name` AS `department_name`,`de`.`dept_location` AS `department_location` from (`doctor` `d` left join `department` `de` on((`d`.`dept_id` = `de`.`dept_id`)));
+
+-- ----------------------------
+-- View structure for v_medicine_stock
+-- ----------------------------
+DROP VIEW IF EXISTS `v_medicine_stock`;
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_medicine_stock` AS select `medicine`.`medicine_id` AS `medicine_id`,`medicine`.`medicine_name` AS `medicine_name`,`medicine`.`specification` AS `medicine_spec`,`medicine`.`unit` AS `medicine_unit`,`medicine`.`price` AS `medicine_unit_price`,`medicine`.`stock` AS `stock_quantity`,`medicine`.`manufacturer` AS `manufacturer`,`medicine`.`expiry_date` AS `expiry_date`,`medicine`.`is_available` AS `is_available` from `medicine` where (`medicine`.`is_available` = true);
+
+-- ----------------------------
+-- View structure for v_patient_info
+-- ----------------------------
+DROP VIEW IF EXISTS `v_patient_info`;
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_patient_info` AS select `patient`.`patient_id` AS `patient_id`,`patient`.`name` AS `patient_name`,`patient`.`gender` AS `gender`,`patient`.`age` AS `age`,`patient`.`phone` AS `phone_number`,`patient`.`id_card` AS `id_card_number`,`patient`.`address` AS `residential_address`,`patient`.`create_time` AS `create_datetime` from `patient`;
+
+-- ----------------------------
+-- View structure for v_payment_info
+-- ----------------------------
+DROP VIEW IF EXISTS `v_payment_info`;
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_payment_info` AS select `py`.`payment_id` AS `payment_id`,`vr`.`visit_id` AS `visit_id`,`p`.`patient_id` AS `patient_id`,`p`.`name` AS `patient_name`,`pr`.`prescription_id` AS `prescription_id`,`py`.`total_amount` AS `total_amount`,`py`.`insurance_amount` AS `insurance_reimbursement`,`py`.`self_pay_amount` AS `personal_self_pay`,`py`.`payment_method` AS `payment_method`,`py`.`payer_name` AS `payer_name`,`py`.`payment_time` AS `payment_datetime` from (((`payment` `py` left join `visitrecord` `vr` on((`py`.`visit_id` = `vr`.`visit_id`))) left join `patient` `p` on((`vr`.`patient_id` = `p`.`patient_id`))) left join `prescription` `pr` on((`py`.`prescription_id` = `pr`.`prescription_id`)));
+
+-- ----------------------------
+-- View structure for v_prescription_medicine_info
+-- ----------------------------
+DROP VIEW IF EXISTS `v_prescription_medicine_info`;
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_prescription_medicine_info` AS select `pm`.`pm_id` AS `prescription_medicine_id`,`pr`.`prescription_id` AS `prescription_id`,`pr`.`visit_id` AS `visit_id`,`d`.`doctor_id` AS `doctor_id`,`d`.`name` AS `doctor_name`,`m`.`medicine_id` AS `medicine_id`,`m`.`medicine_name` AS `medicine_name`,`m`.`specification` AS `medicine_spec`,`m`.`unit` AS `medicine_unit`,`m`.`price` AS `medicine_unit_price`,`pm`.`quantity` AS `medicine_quantity`,(`m`.`price` * `pm`.`quantity`) AS `medicine_subtotal`,`pm`.`usage_desc` AS `usage_instructions`,`pr`.`prescribe_time` AS `prescribe_datetime`,`pr`.`prescription_status` AS `prescription_status` from (((`prescriptionmedicine` `pm` left join `prescription` `pr` on((`pm`.`prescription_id` = `pr`.`prescription_id`))) left join `doctor` `d` on((`pr`.`doctor_id` = `d`.`doctor_id`))) left join `medicine` `m` on((`pm`.`medicine_id` = `m`.`medicine_id`)));
+
+-- ----------------------------
+-- View structure for v_schedule_info
+-- ----------------------------
+DROP VIEW IF EXISTS `v_schedule_info`;
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_schedule_info` AS select `s`.`schedule_id` AS `schedule_id`,`d`.`doctor_id` AS `doctor_id`,`d`.`name` AS `doctor_name`,`de`.`dept_id` AS `department_id`,`de`.`dept_name` AS `department_name`,`cr`.`room_id` AS `clinic_room_id`,`cr`.`room_number` AS `clinic_room_number`,`s`.`work_date` AS `work_date`,`s`.`start_time` AS `work_start_time`,`s`.`end_time` AS `work_end_time`,`s`.`schedule_status` AS `schedule_status` from (((`schedule` `s` left join `doctor` `d` on((`s`.`doctor_id` = `d`.`doctor_id`))) left join `clinicroom` `cr` on((`s`.`room_id` = `cr`.`room_id`))) left join `department` `de` on((`d`.`dept_id` = `de`.`dept_id`)));
+
+-- ----------------------------
+-- View structure for v_visit_record_info
+-- ----------------------------
+DROP VIEW IF EXISTS `v_visit_record_info`;
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_visit_record_info` AS select `vr`.`visit_id` AS `visit_id`,`p`.`patient_id` AS `patient_id`,`p`.`name` AS `patient_name`,`d`.`doctor_id` AS `doctor_id`,`d`.`name` AS `doctor_name`,`cr`.`room_id` AS `clinic_room_id`,`cr`.`room_number` AS `clinic_room_number`,`a`.`appointment_id` AS `appointment_id`,`vr`.`visit_time` AS `visit_datetime`,`vr`.`symptoms` AS `patient_symptoms`,`vr`.`diagnosis` AS `diagnosis_result`,`vr`.`visit_status` AS `visit_status` from ((((`visitrecord` `vr` left join `patient` `p` on((`vr`.`patient_id` = `p`.`patient_id`))) left join `doctor` `d` on((`vr`.`doctor_id` = `d`.`doctor_id`))) left join `clinicroom` `cr` on((`vr`.`room_id` = `cr`.`room_id`))) left join `appointment` `a` on((`vr`.`appointment_id` = `a`.`appointment_id`)));
 
