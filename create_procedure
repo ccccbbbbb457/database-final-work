@@ -1,1 +1,369 @@
+-- Procedure structure for proc_batch_update_doctor_available
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `proc_batch_update_doctor_available`;
+delimiter ;;
+CREATE PROCEDURE `proc_batch_update_doctor_available`(IN p_doctor_ids VARCHAR(1000), -- 医生ID列表，逗号分隔（如：1,2,3）
+    IN p_is_available BOOLEAN)
+BEGIN
+    -- 批量更新医生状态（对应Doctor表，无语法错误）
+    UPDATE Doctor
+    SET is_available = p_is_available
+    WHERE FIND_IN_SET(doctor_id, p_doctor_ids) > 0;
+
+    -- 返回更新结果提示
+    SELECT 
+        CONCAT('成功更新 ', ROW_COUNT(), ' 位医生的出诊状态') AS 操作结果,
+        IF(ROW_COUNT() > 0, '更新成功', '无匹配医生ID，更新失败') AS 状态说明;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Procedure structure for proc_create_prescription_with_stock
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `proc_create_prescription_with_stock`;
+delimiter ;;
+CREATE PROCEDURE `proc_create_prescription_with_stock`(IN p_visit_id INT,          -- 就诊ID
+    IN p_doctor_id INT,         -- 开处方医生ID
+    IN p_medicine_id INT,       -- 药品ID
+    IN p_quantity INT,          -- 药品数量
+    IN p_usage_desc VARCHAR(200), -- 用法用量
+    OUT p_result VARCHAR(100))
+proc_label: BEGIN -- 定义存储过程标签，用于LEAVE退出
+    DECLARE v_stock INT DEFAULT 0; -- 存储药品当前库存
+    DECLARE v_prescription_id INT; -- 存储新建处方ID
+
+    -- 声明异常处理：错误则回滚
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        SET p_result = '开立处方失败：系统异常，数据已回滚';
+    END;
+
+    -- 步骤0：先查询药品库存，判断是否充足
+    SELECT stock INTO v_stock
+    FROM Medicine
+    WHERE medicine_id = p_medicine_id AND is_available = TRUE;
+
+    -- 库存不足时，设置提示并退出存储过程（用LEAVE替代RETURN，兼容低版本）
+    IF v_stock < p_quantity THEN
+        SET p_result = CONCAT('开立处方失败：药品库存不足（当前库存：', v_stock, '，需扣减：', p_quantity, '）');
+        LEAVE proc_label; -- 退出存储过程，不执行后续操作（替代RETURN）
+    END IF;
+
+    -- 启动事务
+    START TRANSACTION;
+
+    -- 步骤1：创建处方主记录（核心操作1）
+    INSERT INTO Prescription (
+        visit_id, doctor_id, prescribe_time, prescription_status
+    )
+    VALUES (
+        p_visit_id, p_doctor_id, NOW(), '未取药'
+    );
+    SET v_prescription_id = LAST_INSERT_ID(); -- 获取新建处方ID
+
+    -- 步骤2：创建处方药品明细（核心操作2）
+    INSERT INTO PrescriptionMedicine (
+        prescription_id, medicine_id, quantity, usage_desc
+    )
+    VALUES (
+        v_prescription_id, p_medicine_id, p_quantity, p_usage_desc
+    );
+
+    -- 步骤3：扣减药品库存（核心操作3）
+    UPDATE Medicine
+    SET stock = stock - p_quantity
+    WHERE medicine_id = p_medicine_id;
+
+    -- 提交事务
+    COMMIT;
+    SET p_result = CONCAT('处方开立成功！处方ID：', v_prescription_id);
+
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Procedure structure for proc_patient_pay_with_visit_status
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `proc_patient_pay_with_visit_status`;
+delimiter ;;
+CREATE PROCEDURE `proc_patient_pay_with_visit_status`(IN p_visit_id INT,          -- 就诊ID
+    IN p_prescription_id INT,   -- 处方ID（无处方传NULL）
+    IN p_total_amount DECIMAL(10,2), -- 总费用
+    IN p_insurance_amount DECIMAL(10,2), -- 医保报销金额
+    IN p_self_pay_amount DECIMAL(10,2), -- 个人自付金额
+    IN p_payment_method ENUM('现金', '微信', '支付宝', '医保'), -- 支付方式
+    IN p_payer_name VARCHAR(50), -- 付款人姓名
+    OUT p_result VARCHAR(100))
+BEGIN
+    -- 声明异常处理：错误则回滚
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        SET p_result = '缴费失败：系统异常，数据已回滚';
+    END;
+
+    -- 启动事务
+    START TRANSACTION;
+
+    -- 步骤1：创建缴费记录（核心操作1）
+    INSERT INTO Payment (
+        visit_id, prescription_id, total_amount, insurance_amount, self_pay_amount,
+        payment_method, payment_time, payer_name
+    )
+    VALUES (
+        p_visit_id, p_prescription_id, p_total_amount, p_insurance_amount, p_self_pay_amount,
+        p_payment_method, NOW(), p_payer_name
+    );
+
+    -- 步骤2：更新就诊记录状态为“已缴费”（核心操作2）
+    UPDATE VisitRecord
+    SET visit_status = '已缴费'
+    WHERE visit_id = p_visit_id;
+
+    -- 提交事务
+    COMMIT;
+    SET p_result = CONCAT('缴费成功！缴费ID：', LAST_INSERT_ID());
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Procedure structure for proc_patient_register_with_visit
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `proc_patient_register_with_visit`;
+delimiter ;;
+CREATE PROCEDURE `proc_patient_register_with_visit`(IN p_patient_id INT,        -- 患者ID
+    IN p_doctor_id INT,         -- 接诊医生ID
+    IN p_room_id INT,           -- 诊室ID
+    IN p_appointment_id INT,    -- 预约ID（无预约传NULL）
+    OUT p_result VARCHAR(100))
+BEGIN
+    -- 声明异常处理：发生错误则回滚事务
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK; -- 回滚所有操作
+        SET p_result = '挂号失败：系统异常，数据已回滚';
+    END;
+
+    -- 启动事务
+    START TRANSACTION;
+
+    -- 步骤1：创建就诊记录（核心操作1）
+    INSERT INTO VisitRecord (
+        patient_id, doctor_id, room_id, appointment_id, visit_time, symptoms, diagnosis, visit_status
+    )
+    VALUES (
+        p_patient_id, p_doctor_id, p_room_id, p_appointment_id, NOW(), '', '', '就诊中'
+    );
+
+    -- 步骤2：若有预约，更新预约状态为“已完成”（核心操作2）
+    IF p_appointment_id IS NOT NULL THEN
+        UPDATE Appointment
+        SET appointment_status = '已完成'
+        WHERE appointment_id = p_appointment_id;
+    END IF;
+
+    -- 提交事务（所有步骤执行成功才提交）
+    COMMIT;
+    SET p_result = CONCAT('挂号成功！就诊ID：', LAST_INSERT_ID());
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Procedure structure for proc_pharmacy_dispense_with_prescription
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `proc_pharmacy_dispense_with_prescription`;
+delimiter ;;
+CREATE PROCEDURE `proc_pharmacy_dispense_with_prescription`(IN p_prescription_id INT,   -- 处方ID
+    OUT p_result VARCHAR(100))
+dispense_label: BEGIN -- 1. 添加存储过程标签，用于LEAVE退出
+    DECLARE v_prescription_status VARCHAR(20); -- 存储处方当前状态
+    -- 声明异常处理：错误则回滚
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        SET p_result = '发药失败：系统异常，数据已回滚';
+    END;
+    -- 步骤0：先查询处方状态，判断是否为“未取药”
+    SELECT prescription_status INTO v_prescription_status
+    FROM Prescription
+    WHERE prescription_id = p_prescription_id;
+    IF v_prescription_status != '未取药' THEN
+        SET p_result = CONCAT('发药失败：处方状态异常（当前状态：', v_prescription_status, '，仅“未取药”处方可发药）');
+        LEAVE dispense_label; -- 2. 用LEAVE替代RETURN，退出存储过程（兼容低版本）
+    END IF;
+    -- 启动事务
+    START TRANSACTION;
+    -- 步骤1：更新处方状态为“已取药”（核心操作1）
+    UPDATE Prescription
+    SET prescription_status = '已取药'
+    WHERE prescription_id = p_prescription_id;
+    COMMIT;
+    SET p_result = CONCAT('发药成功！处方ID：', p_prescription_id, ' 状态已更新为“已取药”');
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Procedure structure for proc_query_lack_medicine
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `proc_query_lack_medicine`;
+delimiter ;;
+CREATE PROCEDURE `proc_query_lack_medicine`(IN p_min_stock INT)
+BEGIN
+    -- 查询低库存药品（对应英文视图v_medicine_stock，单条SELECT）
+    SELECT 
+        medicine_id AS 药品ID,
+        medicine_name AS 药品名称,
+        medicine_spec AS 药品规格,
+        medicine_unit AS 药品单位,
+        medicine_unit_price AS 药品单价,
+        stock_quantity AS 当前库存,
+        manufacturer AS 生产厂家,
+        expiry_date AS 有效期,
+        is_available AS 是否可用
+    FROM v_medicine_stock
+    WHERE stock_quantity < p_min_stock
+    ORDER BY stock_quantity ASC; -- 按库存从少到多排序，优先补货
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Procedure structure for proc_query_patient_full_info
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `proc_query_patient_full_info`;
+delimiter ;;
+CREATE PROCEDURE `proc_query_patient_full_info`(IN p_patient_id INT)
+BEGIN
+    -- 1. 创建临时表（仅当前会话有效，自动销毁，不残留数据）
+    DROP TEMPORARY TABLE IF EXISTS temp_patient_detail;
+    CREATE TEMPORARY TABLE temp_patient_detail (
+        info_type VARCHAR(50) COMMENT '信息类型',
+        info_content TEXT COMMENT '信息内容'
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+    -- 2. 插入患者基础信息（对应英文视图v_patient_info）
+    INSERT INTO temp_patient_detail (info_type, info_content)
+    SELECT 
+        'patient_basic',
+        CONCAT(
+            '患者ID：', patient_id, '，姓名：', patient_name, '，性别：', gender, '，年龄：', age,
+            '，联系电话：', phone_number, '，身份证号：', id_card_number, '，居住地址：', residential_address,
+            '，建档时间：', DATE_FORMAT(create_datetime, '%Y-%m-%d %H:%i:%s')
+        )
+    FROM v_patient_info 
+    WHERE patient_id = p_patient_id;
+
+    -- 3. 插入患者预约信息（对应英文视图v_appointment_info）
+    INSERT INTO temp_patient_detail (info_type, info_content)
+    SELECT 
+        'appointment_info',
+        CONCAT(
+            '预约ID：', appointment_id, '，科室名称：', department_name, '，医生姓名：', doctor_name,
+            '，预约时间：', DATE_FORMAT(expected_datetime, '%Y-%m-%d %H:%i:%s'), '，预约状态：', appointment_status,
+            '，建档时间：', DATE_FORMAT(create_datetime, '%Y-%m-%d %H:%i:%s'), '，取消时间：', IF(cancel_datetime IS NULL, '无', DATE_FORMAT(cancel_datetime, '%Y-%m-%d %H:%i:%s'))
+        )
+    FROM v_appointment_info 
+    WHERE patient_id = p_patient_id;
+
+    -- 4. 插入患者就诊记录（对应英文视图v_visit_record_info）
+    INSERT INTO temp_patient_detail (info_type, info_content)
+    SELECT 
+        'visit_record',
+        CONCAT(
+            '就诊ID：', visit_id, '，医生姓名：', doctor_name, '，诊室编号：', clinic_room_number,
+            '，预约ID：', IF(appointment_id IS NULL, '无', appointment_id), '，就诊时间：', DATE_FORMAT(visit_datetime, '%Y-%m-%d %H:%i:%s'),
+            '，患者症状：', patient_symptoms, '，诊断结果：', diagnosis_result, '，就诊状态：', visit_status
+        )
+    FROM v_visit_record_info 
+    WHERE patient_id = p_patient_id;
+
+    -- 5. 插入患者处方药品明细（对应英文视图v_prescription_medicine_info）
+    INSERT INTO temp_patient_detail (info_type, info_content)
+    SELECT 
+        'prescription_medicine',
+        CONCAT(
+            '处方ID：', prescription_id, '，药品名称：', medicine_name, '，药品规格：', medicine_spec,
+            '，药品单位：', medicine_unit, '，单价：', medicine_unit_price, '，数量：', medicine_quantity,
+            '，药品小计：', medicine_subtotal, '，用法用量：', usage_instructions, '，开方时间：', DATE_FORMAT(prescribe_datetime, '%Y-%m-%d %H:%i:%s'),
+            '，处方状态：', prescription_status
+        )
+    FROM v_prescription_medicine_info pm
+    LEFT JOIN v_visit_record_info vr ON pm.visit_id = vr.visit_id
+    WHERE vr.patient_id = p_patient_id;
+
+    -- 6. 插入患者缴费记录（对应英文视图v_payment_info）
+    INSERT INTO temp_patient_detail (info_type, info_content)
+    SELECT 
+        'payment_info',
+        CONCAT(
+            '缴费ID：', payment_id, '，处方ID：', IF(prescription_id IS NULL, '无', prescription_id), '，总费用：', total_amount,
+            '，医保报销：', insurance_reimbursement, '，个人自付：', personal_self_pay, '，支付方式：', payment_method,
+            '，缴费时间：', DATE_FORMAT(payment_datetime, '%Y-%m-%d %H:%i:%s'), '，付款人：', payer_name
+        )
+    FROM v_payment_info 
+    WHERE patient_id = p_patient_id;
+
+    -- 7. 统一查询临时表，返回所有患者信息（单条SELECT，无语法错误）
+    SELECT * FROM temp_patient_detail;
+
+    -- 8. 手动删除临时表（可选，会话结束后自动销毁）
+    DROP TEMPORARY TABLE IF EXISTS temp_patient_detail;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Procedure structure for proc_query_visit_statistics
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `proc_query_visit_statistics`;
+delimiter ;;
+CREATE PROCEDURE `proc_query_visit_statistics`(IN p_start_time DATETIME,
+    IN p_end_time DATETIME,
+    IN p_group_type VARCHAR(20))
+BEGIN
+    -- 单分支单SELECT，规避低版本语法限制
+    IF p_group_type = 'dept' THEN
+        -- 按科室分组统计
+        SELECT 
+            de.department_name AS 科室名称,
+            COUNT(vr.visit_id) AS 就诊总次数,
+            COUNT(DISTINCT vr.patient_id) AS 就诊患者数
+        FROM v_visit_record_info vr
+        LEFT JOIN v_doctor_info de ON vr.doctor_id = de.doctor_id
+        WHERE vr.visit_datetime BETWEEN p_start_time AND p_end_time
+        GROUP BY de.department_name
+        ORDER BY 就诊总次数 DESC;
+    ELSEIF p_group_type = 'doctor' THEN
+        -- 按医生分组统计
+        SELECT 
+            de.doctor_name AS 医生姓名,
+            de.department_name AS 科室名称,
+            COUNT(vr.visit_id) AS 就诊总次数,
+            COUNT(DISTINCT vr.patient_id) AS 就诊患者数
+        FROM v_visit_record_info vr
+        LEFT JOIN v_doctor_info de ON vr.doctor_id = de.doctor_id
+        WHERE vr.visit_datetime BETWEEN p_start_time AND p_end_time
+        GROUP BY de.doctor_id, de.doctor_name, de.department_name
+        ORDER BY 就诊总次数 DESC;
+    ELSEIF p_group_type = 'all' THEN
+        -- 不分组，整体统计
+        SELECT 
+            COUNT(vr.visit_id) AS 就诊总次数,
+            COUNT(DISTINCT vr.patient_id) AS 就诊患者数,
+            COUNT(DISTINCT vr.doctor_id) AS 接诊医生数
+        FROM v_visit_record_info vr
+        WHERE vr.visit_datetime BETWEEN p_start_time AND p_end_time;
+    ELSE
+        -- 无效分组类型，返回提示
+        SELECT 'Invalid group type! Support: dept/doctor/all' AS 错误提示;
+    END IF;
+END
+;;
+delimiter ;
 
