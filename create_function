@@ -1,1 +1,171 @@
+-- Function structure for fn_calc_prescription_total
+-- ----------------------------
+DROP FUNCTION IF EXISTS `fn_calc_prescription_total`;
+delimiter ;;
+CREATE FUNCTION `fn_calc_prescription_total`(p_prescription_id INT)
+ RETURNS decimal(10,2)
+  DETERMINISTIC
+BEGIN
+    DECLARE total_amount DECIMAL(10,2) DEFAULT 0.00; -- 声明总金额变量，默认0
 
+    -- 计算处方总金额（对应英文视图v_prescription_medicine_info）
+    SELECT SUM(medicine_subtotal) INTO total_amount
+    FROM v_prescription_medicine_info
+    WHERE prescription_id = p_prescription_id;
+
+    -- 处理NULL值（无药品时返回0.00）
+    IF total_amount IS NULL THEN
+        SET total_amount = 0.00;
+    END IF;
+
+    RETURN total_amount;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Function structure for fn_get_doctor_dept
+-- ----------------------------
+DROP FUNCTION IF EXISTS `fn_get_doctor_dept`;
+delimiter ;;
+CREATE FUNCTION `fn_get_doctor_dept`(p_doctor_id INT)
+ RETURNS varchar(50) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
+  DETERMINISTIC
+BEGIN
+    DECLARE dept_name VARCHAR(50); -- 声明返回值变量
+
+    -- 查询科室名称（对应英文视图v_doctor_info）
+    SELECT department_name INTO dept_name
+    FROM v_doctor_info
+    WHERE doctor_id = p_doctor_id
+    LIMIT 1;
+
+    RETURN dept_name;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Function structure for fn_get_medicine_stock
+-- ----------------------------
+DROP FUNCTION IF EXISTS `fn_get_medicine_stock`;
+delimiter ;;
+CREATE FUNCTION `fn_get_medicine_stock`(p_medicine_id INT)
+ RETURNS int
+  DETERMINISTIC
+BEGIN
+    DECLARE stock_num INT DEFAULT 0; -- 声明库存变量，默认0
+
+    -- 查询药品库存（对应英文视图v_medicine_stock）
+    SELECT stock_quantity INTO stock_num
+    FROM v_medicine_stock
+    WHERE medicine_id = p_medicine_id
+    LIMIT 1;
+
+    -- 处理NULL值（无该药品时返回0）
+    IF stock_num IS NULL THEN
+        SET stock_num = 0;
+    END IF;
+
+    RETURN stock_num;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Function structure for fn_get_patient_name
+-- ----------------------------
+DROP FUNCTION IF EXISTS `fn_get_patient_name`;
+delimiter ;;
+CREATE FUNCTION `fn_get_patient_name`(p_patient_id INT)
+ RETURNS varchar(50) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
+  DETERMINISTIC
+BEGIN
+    DECLARE pa_name VARCHAR(50); -- 声明返回值变量
+
+    -- 查询患者姓名（对应英文视图v_patient_info）
+    SELECT patient_name INTO pa_name
+    FROM v_patient_info
+    WHERE patient_id = p_patient_id
+    LIMIT 1; -- 限制单条结果，避免多值报错
+
+    RETURN pa_name;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Function structure for fn_get_visit_doctor
+-- ----------------------------
+DROP FUNCTION IF EXISTS `fn_get_visit_doctor`;
+delimiter ;;
+CREATE FUNCTION `fn_get_visit_doctor`(p_visit_id INT)
+ RETURNS varchar(50) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
+  DETERMINISTIC
+BEGIN
+    DECLARE doctor_name VARCHAR(50); -- 声明医生姓名变量
+
+    -- 查询接诊医生姓名（对应英文视图v_visit_record_info）
+    SELECT doctor_name INTO doctor_name
+    FROM v_visit_record_info
+    WHERE visit_id = p_visit_id
+    LIMIT 1;
+
+    RETURN doctor_name;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Function structure for fn_has_unfinished_appointment
+-- ----------------------------
+DROP FUNCTION IF EXISTS `fn_has_unfinished_appointment`;
+delimiter ;;
+CREATE FUNCTION `fn_has_unfinished_appointment`(p_patient_id INT)
+ RETURNS tinyint(1)
+  DETERMINISTIC
+BEGIN
+    DECLARE has_unfinished TINYINT(1) DEFAULT 0; -- 声明标记变量，默认0（无）
+    DECLARE appointment_count INT DEFAULT 0; -- 声明预约数量变量
+
+    -- 查询患者“待就诊”状态的预约数量
+    SELECT COUNT(*) INTO appointment_count
+    FROM v_appointment_info
+    WHERE patient_id = p_patient_id
+      AND appointment_status = '待就诊'; -- 匹配你的预约状态枚举值
+
+    -- 若数量大于0，标记为1（有未完成预约）
+    IF appointment_count > 0 THEN
+        SET has_unfinished = 1;
+    END IF;
+
+    RETURN has_unfinished;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Function structure for fn_is_medicine_stock_low
+-- ----------------------------
+DROP FUNCTION IF EXISTS `fn_is_medicine_stock_low`;
+delimiter ;;
+CREATE FUNCTION `fn_is_medicine_stock_low`(p_medicine_id INT, -- 输入参数：药品ID
+    p_min_stock INT)
+ RETURNS tinyint(1)
+  DETERMINISTIC
+BEGIN
+    DECLARE is_low TINYINT(1) DEFAULT 0; -- 声明标记变量，默认0（库存充足）
+    DECLARE current_stock INT DEFAULT 0; -- 声明当前库存变量
+
+    -- 获取药品当前库存
+    SET current_stock = fn_get_medicine_stock(p_medicine_id); -- 调用已创建的存储函数
+
+    -- 若当前库存低于阈值，标记为1（库存不足）
+    IF current_stock < p_min_stock THEN
+        SET is_low = 1;
+    END IF;
+
+    RETURN is_low;
+END
+;;
+delimiter ;
