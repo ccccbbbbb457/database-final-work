@@ -1,1 +1,257 @@
+-- Triggers structure for table appointment
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_appointment_after_update`;
+delimiter ;;
+CREATE TRIGGER `trg_appointment_after_update` AFTER UPDATE ON `appointment` FOR EACH ROW BEGIN
+    INSERT INTO OperationLog (operator, operation_type, related_id, operation_content, ip_address, operation_status)
+    VALUES (
+        '前台操作员',
+        '预约变更',
+        NEW.appointment_id,
+        CONCAT('患者ID=',NEW.patient_id,'，科室ID=',NEW.dept_id,'，医生ID=',NEW.doctor_id,'，预约状态由【',OLD.appointment_status,'】更新为【',NEW.appointment_status,'】，取消时间=',IFNULL(NEW.cancel_time,'无')),
+        '192.168.1.100',
+        '成功'
+    );
+END
+;;
+delimiter ;
 
+-- ----------------------------
+-- Triggers structure for table patient
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_patient_before_delete`;
+delimiter ;;
+CREATE TRIGGER `trg_patient_before_delete` BEFORE DELETE ON `patient` FOR EACH ROW BEGIN
+    -- 检查该患者是否存在就诊记录
+    DECLARE visit_count INT DEFAULT 0;
+    SELECT COUNT(*) INTO visit_count
+    FROM VisitRecord
+    WHERE patient_id = OLD.patient_id;
+    
+    -- 若存在就诊记录，抛出异常，阻止删除
+    IF visit_count > 0 THEN
+        SIGNAL SQLSTATE '45000' -- 自定义异常状态码
+        SET MESSAGE_TEXT = '该患者已有就诊记录，禁止删除！';
+    END IF;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table payment
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_payment_after_insert`;
+delimiter ;;
+CREATE TRIGGER `trg_payment_after_insert` AFTER INSERT ON `payment` FOR EACH ROW BEGIN
+    -- 更新对应就诊记录的状态
+    UPDATE VisitRecord
+    SET visit_status = '已缴费'
+    WHERE visit_id = NEW.visit_id
+      AND visit_status <> '已离院'; -- 仅当就诊状态未为“已离院”时更新
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table payment
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_payment_after_insert_log`;
+delimiter ;;
+CREATE TRIGGER `trg_payment_after_insert_log` AFTER INSERT ON `payment` FOR EACH ROW BEGIN
+    INSERT INTO OperationLog (operator, operation_type, related_id, operation_content, ip_address, operation_status)
+    VALUES (
+        '收费员',
+        '缴费',
+        NEW.payment_id,
+        CONCAT('就诊ID=',NEW.visit_id,'，处方ID=',IFNULL(NEW.prescription_id,'无'),'，总费用=',NEW.total_amount,'，医保报销=',NEW.insurance_amount,'，个人自付=',NEW.self_pay_amount,'，支付方式=',NEW.payment_method,'，付款人=',NEW.payer_name),
+        '192.168.1.102',
+        '成功'
+    );
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table prescription
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_prescription_after_insert`;
+delimiter ;;
+CREATE TRIGGER `trg_prescription_after_insert` AFTER INSERT ON `prescription` FOR EACH ROW BEGIN
+    INSERT INTO OperationLog (operator, operation_type, related_id, operation_content, ip_address, operation_status)
+    VALUES (
+        CONCAT('医生ID=',NEW.doctor_id),
+        '开立处方',
+        NEW.prescription_id,
+        CONCAT('就诊ID=',NEW.visit_id,'，开方医生ID=',NEW.doctor_id,'，处方开立时间=',NEW.prescribe_time,'，处方状态=',NEW.prescription_status),
+        '192.168.1.101',
+        '成功'
+    );
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table prescription
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_prescription_before_update`;
+delimiter ;;
+CREATE TRIGGER `trg_prescription_before_update` BEFORE UPDATE ON `prescription` FOR EACH ROW BEGIN
+    -- 声明变量（提前处理字符串，避免嵌套函数）
+    DECLARE lack_medicine VARCHAR(200) DEFAULT '';
+    DECLARE done INT DEFAULT 0;
+    DECLARE med_name VARCHAR(100);
+    DECLARE med_quantity INT;
+    DECLARE med_stock INT;
+    DECLARE error_msg VARCHAR(250) DEFAULT ''; -- 新增：单独存储错误信息
+    
+    -- 声明游标
+    DECLARE cur_medicine CURSOR FOR
+        SELECT m.medicine_name, pm.quantity, m.stock
+        FROM PrescriptionMedicine pm
+        LEFT JOIN Medicine m ON pm.medicine_id = m.medicine_id
+        WHERE pm.prescription_id = NEW.prescription_id;
+    
+    -- 游标处理器
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+    
+    -- 业务逻辑
+    IF OLD.prescription_status <> '已取药' AND NEW.prescription_status = '已取药' THEN
+        OPEN cur_medicine;
+        medicine_loop: LOOP
+            FETCH cur_medicine INTO med_name, med_quantity, med_stock;
+            IF done = 1 THEN LEAVE medicine_loop; END IF;
+            -- 拼接库存不足信息
+            IF med_stock IS NULL OR med_stock < med_quantity THEN
+                SET lack_medicine = CONCAT(lack_medicine, med_name, '（需', med_quantity, '，库存', IFNULL(med_stock, 0), '）；');
+            END IF;
+        END LOOP medicine_loop;
+        CLOSE cur_medicine;
+        
+        -- 提前处理错误信息（避免嵌套函数）
+        IF lack_medicine <> '' THEN
+            SET error_msg = CONCAT('药品库存不足，无法标记为已取药：', LEFT(lack_medicine, 100));
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = error_msg;
+        END IF;
+    END IF;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table prescription
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_prescription_after_update`;
+delimiter ;;
+CREATE TRIGGER `trg_prescription_after_update` AFTER UPDATE ON `prescription` FOR EACH ROW BEGIN
+    IF OLD.prescription_status = '未取药' AND NEW.prescription_status = '已取药' THEN
+        INSERT INTO OperationLog (operator, operation_type, related_id, operation_content, ip_address, operation_status)
+        VALUES (
+            '药房管理员',
+            '发药',
+            NEW.prescription_id,
+            CONCAT('处方ID=',NEW.prescription_id,'，就诊ID=',NEW.visit_id,'，处方状态由【未取药】更新为【已取药】，发药完成'),
+            '192.168.1.103',
+            '成功'
+        );
+    END IF;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table prescription
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_prescription_cancel_after_update`;
+delimiter ;;
+CREATE TRIGGER `trg_prescription_cancel_after_update` AFTER UPDATE ON `prescription` FOR EACH ROW BEGIN
+    IF OLD.prescription_status != '已作废' AND NEW.prescription_status = '已作废' THEN
+        INSERT INTO OperationLog (operator, operation_type, related_id, operation_content, ip_address, operation_status)
+        VALUES (
+            CONCAT('医生ID=',NEW.doctor_id),
+            '处方作废',
+            NEW.prescription_id,
+            CONCAT('处方ID=',NEW.prescription_id,'，就诊ID=',NEW.visit_id,'，处方状态变更为【已作废】'),
+            '192.168.1.101',
+            '成功'
+        );
+    END IF;
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table prescriptionmedicine
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_prescription_medicine_after_insert`;
+delimiter ;;
+CREATE TRIGGER `trg_prescription_medicine_after_insert` AFTER INSERT ON `prescriptionmedicine` FOR EACH ROW -- 行级触发器，每插入一条记录执行一次
+BEGIN
+    -- 更新药品库存：原库存 - 新增处方药品数量
+    UPDATE Medicine
+    SET stock = stock - NEW.quantity
+    WHERE medicine_id = NEW.medicine_id
+      AND is_available = TRUE; -- 仅扣减可用药品库存
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table prescriptionmedicine
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_pres_med_after_insert`;
+delimiter ;;
+CREATE TRIGGER `trg_pres_med_after_insert` AFTER INSERT ON `prescriptionmedicine` FOR EACH ROW BEGIN
+    INSERT INTO OperationLog (operator, operation_type, related_id, operation_content, ip_address, operation_status)
+    VALUES (
+        CONCAT('医生ID=',(SELECT doctor_id FROM Prescription WHERE prescription_id=NEW.prescription_id)),
+        '扣减库存',
+        NEW.medicine_id,
+        CONCAT('处方ID=',NEW.prescription_id,'，药品ID=',NEW.medicine_id,'，扣减数量=',NEW.quantity,'，药品用法=',NEW.usage_desc),
+        '192.168.1.101',
+        '成功'
+    );
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table visitrecord
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_visit_after_insert`;
+delimiter ;;
+CREATE TRIGGER `trg_visit_after_insert` AFTER INSERT ON `visitrecord` FOR EACH ROW BEGIN
+    INSERT INTO OperationLog (operator, operation_type, related_id, operation_content, ip_address, operation_status)
+    VALUES (
+        '前台操作员',
+        '挂号',
+        NEW.visit_id,
+        CONCAT('患者ID=',NEW.patient_id,'，接诊医生ID=',NEW.doctor_id,'，诊室ID=',NEW.room_id,'，预约ID=',IFNULL(NEW.appointment_id,'无'),'，就诊状态=',NEW.visit_status),
+        '192.168.1.100',
+        '成功'
+    );
+END
+;;
+delimiter ;
+
+-- ----------------------------
+-- Triggers structure for table visitrecord
+-- ----------------------------
+DROP TRIGGER IF EXISTS `trg_visit_after_update`;
+delimiter ;;
+CREATE TRIGGER `trg_visit_after_update` AFTER UPDATE ON `visitrecord` FOR EACH ROW BEGIN
+    IF OLD.visit_status != NEW.visit_status THEN
+        INSERT INTO OperationLog (operator, operation_type, related_id, operation_content, ip_address, operation_status)
+        VALUES (
+            '系统自动',
+            '就诊状态变更',
+            NEW.visit_id,
+            CONCAT('患者ID=',NEW.patient_id,'，就诊状态由【',OLD.visit_status,'】更新为【',NEW.visit_status,'】'),
+            '127.0.0.1',
+            '成功'
+        );
+    END IF;
+END
+;;
+delimiter ;
+
+SET FOREIGN_KEY_CHECKS = 1;
